@@ -114,6 +114,7 @@ public class GcsEventsHoodieIncrSource extends HoodieIncrSource {
   private final CloudDataFetcher gcsObjectDataFetcher;
   private final QueryRunner queryRunner;
   private final Option<SchemaProvider> schemaProvider;
+  private final Option<SnapshotLoadQuerySplitter> snapshotLoadQuerySplitter;
 
 
   public static final String GCS_OBJECT_KEY = "name";
@@ -145,6 +146,7 @@ public class GcsEventsHoodieIncrSource extends HoodieIncrSource {
     this.gcsObjectDataFetcher = gcsObjectDataFetcher;
     this.queryRunner = queryRunner;
     this.schemaProvider = Option.ofNullable(schemaProvider);
+    this.snapshotLoadQuerySplitter = SnapshotLoadQuerySplitter.getInstance(props);
 
     LOG.info("srcPath: " + srcPath);
     LOG.info("missingCheckpointStrategy: " + missingCheckpointStrategy);
@@ -171,11 +173,13 @@ public class GcsEventsHoodieIncrSource extends HoodieIncrSource {
       return Pair.of(Option.empty(), queryInfo.getStartInstant());
     }
 
-    Dataset<Row> cloudObjectMetadataDF = queryRunner.run(queryInfo);
+    Pair<QueryInfo, Dataset<Row>> queryInfoDatasetPair = queryRunner.run(queryInfo, snapshotLoadQuerySplitter);
+    Dataset<Row> filteredSourceData = gcsObjectMetadataFetcher.applyFilter(queryInfoDatasetPair.getRight());
+    queryInfo = queryInfoDatasetPair.getLeft();
     LOG.info("Adjusting end checkpoint:" + queryInfo.getEndInstant() + " based on sourceLimit :" + sourceLimit);
     Pair<CloudObjectIncrCheckpoint, Option<Dataset<Row>>> checkPointAndDataset =
         IncrSourceHelper.filterAndGenerateCheckpointBasedOnSourceLimit(
-            cloudObjectMetadataDF, sourceLimit, queryInfo, cloudObjectIncrCheckpoint);
+            filteredSourceData, sourceLimit, queryInfo, cloudObjectIncrCheckpoint);
     if (!checkPointAndDataset.getRight().isPresent()) {
       LOG.info("Empty source, returning endpoint:" + queryInfo.getEndInstant());
       return Pair.of(Option.empty(), queryInfo.getEndInstant());

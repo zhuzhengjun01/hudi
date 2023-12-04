@@ -21,6 +21,7 @@ package org.apache.hudi.hadoop.realtime;
 import org.apache.hudi.avro.HoodieAvroUtils;
 import org.apache.hudi.avro.model.HoodieCompactionPlan;
 import org.apache.hudi.common.config.HoodieCommonConfig;
+import org.apache.hudi.common.config.HoodieMemoryConfig;
 import org.apache.hudi.common.fs.FSUtils;
 import org.apache.hudi.common.model.FileSlice;
 import org.apache.hudi.common.model.HoodieCommitMetadata;
@@ -33,6 +34,7 @@ import org.apache.hudi.common.table.log.HoodieLogFormat;
 import org.apache.hudi.common.table.log.HoodieLogFormat.Writer;
 import org.apache.hudi.common.table.log.block.HoodieLogBlock;
 import org.apache.hudi.common.table.timeline.HoodieTimeline;
+import org.apache.hudi.common.testutils.InProcessTimeGenerator;
 import org.apache.hudi.common.table.timeline.TimelineMetadataUtils;
 import org.apache.hudi.common.testutils.FileCreateUtils;
 import org.apache.hudi.common.testutils.HoodieTestUtils;
@@ -43,7 +45,6 @@ import org.apache.hudi.common.util.collection.ExternalSpillableMap;
 import org.apache.hudi.common.util.collection.Pair;
 import org.apache.hudi.exception.HoodieException;
 import org.apache.hudi.hadoop.RealtimeFileStatus;
-import org.apache.hudi.hadoop.config.HoodieRealtimeConfig;
 import org.apache.hudi.hadoop.testutils.InputFormatTestUtil;
 import org.apache.hudi.hadoop.utils.HoodieRealtimeRecordReaderUtils;
 
@@ -83,7 +84,6 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.net.URI;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -95,6 +95,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static org.apache.hudi.common.table.timeline.TimelineMetadataUtils.serializeCommitMetadata;
 import static org.apache.hudi.hadoop.realtime.HoodieRealtimeRecordReader.REALTIME_SKIP_MERGE_PROP;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -114,7 +115,7 @@ public class TestHoodieRealtimeRecordReader {
     hadoopConf.set("fs.defaultFS", "file:///");
     hadoopConf.set("fs.file.impl", org.apache.hadoop.fs.LocalFileSystem.class.getName());
     baseJobConf = new JobConf(hadoopConf);
-    baseJobConf.set(HoodieRealtimeConfig.MAX_DFS_STREAM_BUFFER_SIZE_PROP, String.valueOf(1024 * 1024));
+    baseJobConf.set(HoodieMemoryConfig.MAX_DFS_STREAM_BUFFER_SIZE.key(), String.valueOf(1024 * 1024));
     fs = FSUtils.getFs(basePath.toUri().toString(), baseJobConf);
   }
 
@@ -686,7 +687,7 @@ public class TestHoodieRealtimeRecordReader {
           InputFormatTestUtil.writeDataBlockToLogFile(partitionDir, fs, schema, "fileid0", instantTime, newCommitTime,
               numRecords, numRecords, 0);
       writer.close();
-      createDeltaCommitFile(basePath, newCommitTime, "2016/05/01", "2016/05/01/.fileid0_100.log.1_1-0-1", "fileid0", schema.toString());
+      createDeltaCommitFile(basePath, newCommitTime, "2016/05/01", "2016/05/01/.fileid0_102.log.0_1-0-1", "fileid0", schema.toString());
 
       InputFormatTestUtil.setupIncremental(baseJobConf, "101", 1);
 
@@ -775,10 +776,11 @@ public class TestHoodieRealtimeRecordReader {
     HoodieReplaceCommitMetadata replaceMetadata = new HoodieReplaceCommitMetadata();
     replaceMetadata.setPartitionToReplaceFileIds(partitionToReplaceFileIds);
     writeStats.forEach(stat -> replaceMetadata.addWriteStat(partitionPath, stat));
-    File file = basePath.resolve(".hoodie").resolve(commitNumber + ".replacecommit").toFile();
+    File file = basePath.resolve(".hoodie")
+        .resolve(commitNumber + "_" + InProcessTimeGenerator.createNewInstantTime() + ".replacecommit").toFile();
     file.createNewFile();
     FileOutputStream fileOutputStream = new FileOutputStream(file);
-    fileOutputStream.write(replaceMetadata.toJsonString().getBytes(StandardCharsets.UTF_8));
+    fileOutputStream.write(serializeCommitMetadata(replaceMetadata).get());
     fileOutputStream.flush();
     fileOutputStream.close();
   }
@@ -817,10 +819,11 @@ public class TestHoodieRealtimeRecordReader {
     if (schemaStr != null) {
       commitMetadata.getExtraMetadata().put(HoodieCommitMetadata.SCHEMA_KEY, schemaStr);
     }
-    File file = basePath.resolve(".hoodie").resolve(commitNumber + ".deltacommit").toFile();
+    File file = basePath.resolve(".hoodie")
+        .resolve(commitNumber + "_" + InProcessTimeGenerator.createNewInstantTime() + ".deltacommit").toFile();
     file.createNewFile();
     FileOutputStream fileOutputStream = new FileOutputStream(file);
-    fileOutputStream.write(commitMetadata.toJsonString().getBytes(StandardCharsets.UTF_8));
+    fileOutputStream.write(serializeCommitMetadata(commitMetadata).get());
     fileOutputStream.flush();
     fileOutputStream.close();
   }
@@ -883,6 +886,24 @@ public class TestHoodieRealtimeRecordReader {
     } catch (Exception e) {
       throw new HoodieException(e.getMessage(), e);
     }
+  }
+
+  @Test
+  public void testRealtimeInputFormatEmptyFileSplit() throws Exception {
+    // Add the empty paths
+    String emptyPath = ClassLoader.getSystemResource("emptyFile").getPath();
+    FileInputFormat.setInputPaths(baseJobConf, emptyPath);
+
+    HoodieParquetRealtimeInputFormat inputFormat =  new HoodieParquetRealtimeInputFormat();
+    inputFormat.setConf(baseJobConf);
+
+    InputSplit[] inputSplits = inputFormat.getSplits(baseJobConf, 10);
+    assertEquals(1, inputSplits.length);
+    assertEquals(true, inputSplits[0] instanceof RealtimeSplit);
+
+    FileStatus[] files = inputFormat.listStatus(baseJobConf);
+    assertEquals(1, files.length);
+    assertEquals(true, files[0] instanceof RealtimeFileStatus);
   }
 
   @Test

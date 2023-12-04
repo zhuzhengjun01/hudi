@@ -108,6 +108,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.apache.hudi.common.testutils.HoodieTestUtils.RAW_TRIPS_TEST_NAME;
+import static org.apache.hudi.common.util.StringUtils.getUTF8Bytes;
 import static org.apache.hudi.io.storage.HoodieAvroHFileReader.SCHEMA_KEY;
 import static org.apache.hudi.testutils.Assertions.assertNoWriteErrors;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -183,6 +184,11 @@ public abstract class HoodieJavaClientTestHarness extends HoodieWriterClientTest
     @Override
     public Option<String> getProperty(EngineProperty prop) {
       return Option.empty();
+    }
+
+    @Override
+    public Supplier<Integer> getAttemptNumberSupplier() {
+      return () -> (int)attemptId;
     }
   }
 
@@ -377,49 +383,51 @@ public abstract class HoodieJavaClientTestHarness extends HoodieWriterClientTest
   private void runFullValidation(HoodieWriteConfig writeConfig,
                                  String metadataTableBasePath,
                                  HoodieEngineContext engineContext) {
-    HoodieBackedTableMetadataWriter metadataWriter = metadataWriter(writeConfig);
-    assertNotNull(metadataWriter, "MetadataWriter should have been initialized");
+    try (HoodieBackedTableMetadataWriter metadataWriter = metadataWriter(writeConfig)) {
+      assertNotNull(metadataWriter, "MetadataWriter should have been initialized");
 
-    // Validate write config for metadata table
-    HoodieWriteConfig metadataWriteConfig = metadataWriter.getWriteConfig();
-    assertFalse(metadataWriteConfig.isMetadataTableEnabled(), "No metadata table for metadata table");
+      // Validate write config for metadata table
+      HoodieWriteConfig metadataWriteConfig = metadataWriter.getWriteConfig();
+      assertFalse(metadataWriteConfig.isMetadataTableEnabled(), "No metadata table for metadata table");
 
-    HoodieTableMetaClient metadataMetaClient = HoodieTableMetaClient.builder().setConf(hadoopConf).setBasePath(metadataTableBasePath).build();
+      HoodieTableMetaClient metadataMetaClient = HoodieTableMetaClient.builder().setConf(hadoopConf).setBasePath(metadataTableBasePath).build();
 
-    // Metadata table is MOR
-    assertEquals(metadataMetaClient.getTableType(), HoodieTableType.MERGE_ON_READ, "Metadata Table should be MOR");
+      // Metadata table is MOR
+      assertEquals(metadataMetaClient.getTableType(), HoodieTableType.MERGE_ON_READ, "Metadata Table should be MOR");
 
-    // Metadata table is HFile format
-    assertEquals(metadataMetaClient.getTableConfig().getBaseFileFormat(), HoodieFileFormat.HFILE,
-        "Metadata Table base file format should be HFile");
+      // Metadata table is HFile format
+      assertEquals(metadataMetaClient.getTableConfig().getBaseFileFormat(), HoodieFileFormat.HFILE,
+          "Metadata Table base file format should be HFile");
 
-    // Metadata table has a fixed number of partitions
-    // Cannot use FSUtils.getAllFoldersWithPartitionMetaFile for this as that function filters all directory
-    // in the .hoodie folder.
-    List<String> metadataTablePartitions = FSUtils.getAllPartitionPaths(engineContext, HoodieTableMetadata.getMetadataTableBasePath(basePath),
-        false, false);
+      // Metadata table has a fixed number of partitions
+      // Cannot use FSUtils.getAllFoldersWithPartitionMetaFile for this as that function filters all directory
+      // in the .hoodie folder.
+      List<String> metadataTablePartitions = FSUtils.getAllPartitionPaths(engineContext, HoodieTableMetadata.getMetadataTableBasePath(basePath), false);
 
-    List<MetadataPartitionType> enabledPartitionTypes = metadataWriter.getEnabledPartitionTypes();
+      List<MetadataPartitionType> enabledPartitionTypes = metadataWriter.getEnabledPartitionTypes();
 
-    assertEquals(enabledPartitionTypes.size(), metadataTablePartitions.size());
+      assertEquals(enabledPartitionTypes.size(), metadataTablePartitions.size());
 
-    Map<String, MetadataPartitionType> partitionTypeMap = enabledPartitionTypes.stream()
-        .collect(Collectors.toMap(MetadataPartitionType::getPartitionPath, Function.identity()));
+      Map<String, MetadataPartitionType> partitionTypeMap = enabledPartitionTypes.stream()
+          .collect(Collectors.toMap(MetadataPartitionType::getPartitionPath, Function.identity()));
 
-    // Metadata table should automatically compact and clean
-    // versions are +1 as autoClean / compaction happens end of commits
-    int numFileVersions = metadataWriteConfig.getCleanerFileVersionsRetained() + 1;
-    HoodieTableFileSystemView fsView = new HoodieTableFileSystemView(metadataMetaClient, metadataMetaClient.getActiveTimeline());
-    metadataTablePartitions.forEach(partition -> {
-      MetadataPartitionType partitionType = partitionTypeMap.get(partition);
+      // Metadata table should automatically compact and clean
+      // versions are +1 as autoClean / compaction happens end of commits
+      int numFileVersions = metadataWriteConfig.getCleanerFileVersionsRetained() + 1;
+      HoodieTableFileSystemView fsView = new HoodieTableFileSystemView(metadataMetaClient, metadataMetaClient.getActiveTimeline());
+      metadataTablePartitions.forEach(partition -> {
+        MetadataPartitionType partitionType = partitionTypeMap.get(partition);
 
-      List<FileSlice> latestSlices = fsView.getLatestFileSlices(partition).collect(Collectors.toList());
+        List<FileSlice> latestSlices = fsView.getLatestFileSlices(partition).collect(Collectors.toList());
 
-      assertTrue(latestSlices.stream().map(FileSlice::getBaseFile).filter(Objects::nonNull).count() > 0, "Should have a single latest base file");
-      assertTrue(latestSlices.size() > 0, "Should have a single latest file slice");
-      assertTrue(latestSlices.size() <= numFileVersions, "Should limit file slice to "
-          + numFileVersions + " but was " + latestSlices.size());
-    });
+        assertTrue(latestSlices.stream().map(FileSlice::getBaseFile).filter(Objects::nonNull).count() > 0, "Should have a single latest base file");
+        assertTrue(latestSlices.size() > 0, "Should have a single latest file slice");
+        assertTrue(latestSlices.size() <= numFileVersions, "Should limit file slice to "
+            + numFileVersions + " but was " + latestSlices.size());
+      });
+    } catch (Exception e) {
+      throw new RuntimeException("Error closing metadata writer", e);
+    }
   }
 
   public HoodieJavaTable getHoodieTable(HoodieTableMetaClient metaClient, HoodieWriteConfig config) {
@@ -996,7 +1004,7 @@ public abstract class HoodieJavaClientTestHarness extends HoodieWriterClientTest
         HFile.Reader reader =
             HoodieHFileUtils.createHFileReader(fs, new Path(path), cacheConfig, fs.getConf());
         if (schema == null) {
-          schema = new Schema.Parser().parse(new String(reader.getHFileInfo().get(SCHEMA_KEY.getBytes())));
+          schema = new Schema.Parser().parse(new String(reader.getHFileInfo().get(getUTF8Bytes(SCHEMA_KEY))));
         }
         HFileScanner scanner = reader.getScanner(false, false);
         if (!scanner.seekTo()) {
@@ -1037,5 +1045,9 @@ public abstract class HoodieJavaClientTestHarness extends HoodieWriterClientTest
       builder.withSchema(schemaStr);
     }
     return builder;
+  }
+
+  public static BaseFileUtils getFileUtilsInstance(HoodieTableMetaClient metaClient) {
+    return BaseFileUtils.getInstance(metaClient.getTableConfig().getBaseFileFormat());
   }
 }

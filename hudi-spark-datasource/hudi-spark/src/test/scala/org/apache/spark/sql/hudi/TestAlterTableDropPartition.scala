@@ -417,7 +417,6 @@ class TestAlterTableDropPartition extends HoodieSparkSqlTestBase {
         spark.sql(s"""insert into $tableName values (2, "l4", "v1", "2021", "10", "02")""")
 
         checkAnswer(s"select id, name, ts, year, month, day from $tableName")(
-          Seq(2, "l4", "v1", "2021", "10", "02"),
           Seq(2, "l4", "v1", "2021", "10", "02")
         )
 
@@ -517,7 +516,7 @@ class TestAlterTableDropPartition extends HoodieSparkSqlTestBase {
       val client = HoodieCLIUtils.createHoodieWriteClient(spark, basePath, Map.empty, Option(tableName))
 
       // Generate the first clustering plan
-      val firstScheduleInstant = HoodieActiveTimeline.createNewInstantTime
+      val firstScheduleInstant = client.createNewInstantTime()
       client.scheduleClusteringAtInstant(firstScheduleInstant, HOption.empty())
 
       checkAnswer(s"call show_clustering('$tableName')")(
@@ -564,7 +563,7 @@ class TestAlterTableDropPartition extends HoodieSparkSqlTestBase {
       val client = HoodieCLIUtils.createHoodieWriteClient(spark, basePath, Map.empty, Option(tableName))
 
       // Generate the first compaction plan
-      val firstScheduleInstant = HoodieActiveTimeline.createNewInstantTime
+      val firstScheduleInstant = client.createNewInstantTime()
       assertTrue(client.scheduleCompactionAtInstant(firstScheduleInstant, HOption.empty()))
 
       checkAnswer(s"call show_compaction('$tableName')")(
@@ -612,7 +611,7 @@ class TestAlterTableDropPartition extends HoodieSparkSqlTestBase {
       val client = HoodieCLIUtils.createHoodieWriteClient(spark, basePath, Map.empty, Option(tableName))
 
       // Generate the first log_compaction plan
-      val firstScheduleInstant = HoodieActiveTimeline.createNewInstantTime
+      val firstScheduleInstant = client.createNewInstantTime()
       assertTrue(client.scheduleLogCompactionAtInstant(firstScheduleInstant, HOption.empty()))
 
       val partition = "ts=1000"

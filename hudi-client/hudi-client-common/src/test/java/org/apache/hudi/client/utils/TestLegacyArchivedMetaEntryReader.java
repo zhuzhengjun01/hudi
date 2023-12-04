@@ -19,7 +19,7 @@
 package org.apache.hudi.client.utils;
 
 import org.apache.hudi.avro.model.HoodieArchivedMetaEntry;
-import org.apache.hudi.client.timeline.ActiveAction;
+import org.apache.hudi.common.table.timeline.ActiveAction;
 import org.apache.hudi.common.model.HoodieArchivedLogFile;
 import org.apache.hudi.common.model.HoodieAvroIndexedRecord;
 import org.apache.hudi.common.model.HoodieCommitMetadata;
@@ -32,6 +32,7 @@ import org.apache.hudi.common.table.log.block.HoodieAvroDataBlock;
 import org.apache.hudi.common.table.log.block.HoodieLogBlock;
 import org.apache.hudi.common.table.timeline.HoodieActiveTimeline;
 import org.apache.hudi.common.table.timeline.HoodieInstant;
+import org.apache.hudi.common.table.timeline.MetadataConversionUtils;
 import org.apache.hudi.common.testutils.HoodieTestTable;
 import org.apache.hudi.common.testutils.HoodieTestUtils;
 import org.apache.hudi.common.util.Option;
@@ -102,7 +103,7 @@ public class TestLegacyArchivedMetaEntryReader {
     try {
       return HoodieLogFormat.newWriterBuilder().onParentPath(new Path(metaClient.getArchivePath()))
           .withFileId("commits").withFileExtension(HoodieArchivedLogFile.ARCHIVE_EXTENSION)
-          .withFs(metaClient.getFs()).overBaseCommit("").build();
+          .withFs(metaClient.getFs()).withDeltaCommit("").build();
     } catch (IOException e) {
       throw new HoodieException("Unable to initialize HoodieLogFormat writer", e);
     }
@@ -133,7 +134,7 @@ public class TestLegacyArchivedMetaEntryReader {
       header.put(HoodieLogBlock.HeaderMetadataType.SCHEMA, wrapperSchema.toString());
       final String keyField = metaClient.getTableConfig().getRecordKeyFieldProp();
       List<HoodieRecord> indexRecords = records.stream().map(HoodieAvroIndexedRecord::new).collect(Collectors.toList());
-      HoodieAvroDataBlock block = new HoodieAvroDataBlock(indexRecords, header, keyField);
+      HoodieAvroDataBlock block = new HoodieAvroDataBlock(indexRecords, false, header, keyField);
       writer.appendBlock(block);
       records.clear();
     }
